@@ -1,0 +1,765 @@
+
+import os
+import uuid
+import cv2
+import joblib
+import numpy as np
+import pandas as pd
+import tkinter as tk
+
+from tkinter import messagebox
+from PIL import Image, ImageDraw
+from sklearn.svm import SVC
+from sklearn.utils import shuffle
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score, classification_report
+
+
+# =====================================================
+# 1. PROJECT CONFIGURATION
+# =====================================================
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+IMAGE_DIR = os.path.join(BASE_DIR, "captured_images")
+MODEL_DIR = os.path.join(BASE_DIR, "model")
+
+DATASET_PATH = os.path.join(BASE_DIR, "dataset.csv")
+MODEL_PATH = os.path.join(MODEL_DIR, "digit_recognizer.pkl")
+
+CANVAS_SIZE = 280
+IMAGE_SIZE = 28
+
+os.makedirs(IMAGE_DIR, exist_ok=True)
+os.makedirs(MODEL_DIR, exist_ok=True)
+
+for digit in range(10):
+    os.makedirs(
+        os.path.join(IMAGE_DIR, str(digit)),
+        exist_ok=True
+    )
+
+
+# =====================================================
+# 2. IMAGE PREPROCESSING
+# =====================================================
+
+def preprocess_image(image):
+
+    # Convert PIL image to grayscale
+    image = image.convert("L")
+
+    # Convert image into NumPy array
+    image = np.array(image)
+
+    # Detect handwritten digit
+    _, binary = cv2.threshold(
+        image,
+        30,
+        255,
+        cv2.THRESH_BINARY
+    )
+
+    # Find digit boundaries
+    coords = cv2.findNonZero(binary)
+
+    if coords is None:
+        return np.zeros(784, dtype=np.uint8)
+
+    x, y, w, h = cv2.boundingRect(coords)
+
+    # Crop the digit
+    digit = binary[y:y+h, x:x+w]
+
+    # Resize while maintaining aspect ratio
+    scale = 20.0 / max(w, h)
+
+    new_w = max(1, int(w * scale))
+    new_h = max(1, int(h * scale))
+
+    digit = cv2.resize(
+        digit,
+        (new_w, new_h),
+        interpolation=cv2.INTER_AREA
+    )
+
+    # Place digit in a 28x28 black image
+    final_image = np.zeros((28, 28), dtype=np.uint8)
+
+    x_offset = (28 - new_w) // 2
+    y_offset = (28 - new_h) // 2
+
+    final_image[
+        y_offset:y_offset+new_h,
+        x_offset:x_offset+new_w
+    ] = digit
+
+    # Flatten 28x28 image into 784 features
+    return final_image.flatten()
+
+
+# =====================================================
+# 3. MAIN TKINTER WINDOW
+# =====================================================
+
+window = tk.Tk()
+
+window.title("Handwritten Digit Recognition System")
+
+window.geometry("750x760")
+
+window.resizable(False, False)
+
+window.configure(bg="#f0f2f5")
+
+
+# =====================================================
+# 4. TITLE
+# =====================================================
+
+title = tk.Label(
+    window,
+    text="HANDWRITTEN DIGIT RECOGNIZER",
+    font=("Arial", 20, "bold"),
+    bg="#f0f2f5",
+    fg="#173b70"
+)
+
+title.pack(pady=15)
+
+
+subtitle = tk.Label(
+    window,
+    text="Machine Learning Based Digit Classification using SVM",
+    font=("Arial", 10),
+    bg="#f0f2f5",
+    fg="gray"
+)
+
+subtitle.pack(pady=3)
+
+
+# =====================================================
+# 5. DRAWING CANVAS
+# =====================================================
+
+canvas_frame = tk.Frame(
+    window,
+    bg="white",
+    bd=3,
+    relief=tk.RIDGE
+)
+
+canvas_frame.pack(pady=15)
+
+canvas = tk.Canvas(
+    canvas_frame,
+    width=CANVAS_SIZE,
+    height=CANVAS_SIZE,
+    bg="black",
+    cursor="cross",
+    highlightthickness=0
+)
+
+canvas.pack()
+
+# PIL image stores the handwritten digit
+drawing_image = Image.new(
+    "L",
+    (CANVAS_SIZE, CANVAS_SIZE),
+    0
+)
+
+draw = ImageDraw.Draw(drawing_image)
+
+last_x = None
+last_y = None
+
+
+# =====================================================
+# 6. DRAWING FUNCTIONS
+# =====================================================
+
+def start_drawing(event):
+
+    global last_x, last_y
+
+    last_x = event.x
+    last_y = event.y
+
+    # Draw a dot for a single click
+    radius = 9
+
+    draw.ellipse(
+        (
+            event.x-radius,
+            event.y-radius,
+            event.x+radius,
+            event.y+radius
+        ),
+        fill=255
+    )
+
+    canvas.create_oval(
+        event.x-radius,
+        event.y-radius,
+        event.x+radius,
+        event.y+radius,
+        fill="white",
+        outline="white"
+    )
+
+
+def draw_digit(event):
+
+    global last_x, last_y
+
+    if last_x is not None and last_y is not None:
+
+        # Draw on Tkinter canvas
+        canvas.create_line(
+            last_x,
+            last_y,
+            event.x,
+            event.y,
+            fill="white",
+            width=18,
+            capstyle=tk.ROUND,
+            smooth=True
+        )
+
+        # Draw on PIL image
+        draw.line(
+            (last_x, last_y, event.x, event.y),
+            fill=255,
+            width=18
+        )
+
+        radius = 9
+
+        draw.ellipse(
+            (
+                event.x-radius,
+                event.y-radius,
+                event.x+radius,
+                event.y+radius
+            ),
+            fill=255
+        )
+
+    last_x = event.x
+    last_y = event.y
+
+
+def stop_drawing(event):
+
+    global last_x, last_y
+
+    last_x = None
+    last_y = None
+
+
+canvas.bind("<Button-1>", start_drawing)
+canvas.bind("<B1-Motion>", draw_digit)
+canvas.bind("<ButtonRelease-1>", stop_drawing)
+
+
+# =====================================================
+# 7. CLEAR CANVAS
+# =====================================================
+
+def clear_canvas():
+
+    global drawing_image, draw
+    global last_x, last_y
+
+    canvas.delete("all")
+
+    drawing_image = Image.new(
+        "L",
+        (CANVAS_SIZE, CANVAS_SIZE),
+        0
+    )
+
+    draw = ImageDraw.Draw(drawing_image)
+
+    last_x = None
+    last_y = None
+
+    result_label.config(
+        text="Draw a digit from 0 to 9",
+        fg="#173b70"
+    )
+
+
+# =====================================================
+# 8. SAVE HANDWRITTEN DIGIT
+# =====================================================
+
+def save_sample():
+
+    label = label_entry.get().strip()
+
+    if not label.isdigit() or len(label) != 1:
+
+        messagebox.showerror(
+            "Invalid Label",
+            "Please enter a digit between 0 and 9."
+        )
+
+        return
+
+    if np.max(np.array(drawing_image)) == 0:
+
+        messagebox.showerror(
+            "Empty Canvas",
+            "Please draw a digit first."
+        )
+
+        return
+
+    folder = os.path.join(IMAGE_DIR, label)
+
+    os.makedirs(folder, exist_ok=True)
+
+    # Generate unique filename
+    filename = str(uuid.uuid4()) + ".png"
+
+    filepath = os.path.join(folder, filename)
+
+    # Save original handwritten image
+    drawing_image.save(filepath)
+
+    messagebox.showinfo(
+        "Sample Saved",
+        f"Digit {label} saved successfully!"
+    )
+
+    clear_canvas()
+
+
+# =====================================================
+# 9. GENERATE DATASET
+# =====================================================
+
+def generate_dataset():
+
+    features = []
+    labels = []
+
+    for label in range(10):
+
+        folder = os.path.join(IMAGE_DIR, str(label))
+
+        for filename in os.listdir(folder):
+
+            if not filename.lower().endswith(".png"):
+                continue
+
+            filepath = os.path.join(folder, filename)
+
+            try:
+
+                image = Image.open(filepath)
+
+                pixels = preprocess_image(image)
+
+                features.append(pixels)
+                labels.append(label)
+
+            except Exception as e:
+
+                print("Error reading image:", filepath, e)
+
+    if len(features) == 0:
+
+        messagebox.showerror(
+            "Dataset Error",
+            "No images found!\nSave handwritten samples first."
+        )
+
+        return
+
+    columns = [
+        "pixel" + str(i) for i in range(784)
+    ]
+
+    data = pd.DataFrame(
+        features,
+        columns=columns
+    )
+
+    data.insert(0, "label", labels)
+
+    # Always overwrite old dataset
+    data.to_csv(
+        DATASET_PATH,
+        index=False
+    )
+
+    messagebox.showinfo(
+        "Dataset Generated",
+        f"Dataset generated successfully!\n\n"
+        f"Total Images: {len(data)}\n"
+        f"Total Features: 784\n"
+        f"Classes: {data['label'].nunique()}"
+    )
+
+
+# =====================================================
+# 10. TRAIN SVM MODEL
+# =====================================================
+
+def train_model():
+
+    if not os.path.exists(DATASET_PATH):
+
+        messagebox.showerror(
+            "Error",
+            "Generate the dataset first."
+        )
+
+        return
+
+    try:
+
+        data = pd.read_csv(DATASET_PATH)
+
+        if data.empty:
+
+            messagebox.showerror(
+                "Error",
+                "Dataset is empty."
+            )
+
+            return
+
+        X = data.drop("label", axis=1)
+
+        Y = data["label"]
+
+        # Check dataset dimensions
+        if X.shape[1] != 784:
+
+            messagebox.showerror(
+                "Error",
+                "Dataset must contain exactly 784 pixel features."
+            )
+
+            return
+
+        if Y.nunique() < 2:
+
+            messagebox.showerror(
+                "Error",
+                "Collect samples from at least two different digits."
+            )
+
+            return
+
+        if Y.value_counts().min() < 2:
+
+            messagebox.showerror(
+                "Error",
+                "Every digit class must have at least 2 samples."
+            )
+
+            return
+
+        X, Y = shuffle(
+            X,
+            Y,
+            random_state=42
+        )
+
+        # Split dataset into training and testing
+        train_x, test_x, train_y, test_y = train_test_split(
+            X,
+            Y,
+            test_size=0.5,
+            random_state=42,
+            stratify=Y
+        )
+
+        # Create SVM classifier
+        classifier = SVC(
+            kernel="linear",
+            random_state=6
+        )
+
+        # Train using training data
+        classifier.fit(
+            train_x,
+            train_y
+        )
+
+        # Predict testing data
+        prediction = classifier.predict(test_x)
+
+        accuracy = accuracy_score(
+            test_y,
+            prediction
+        )
+
+        # Train final model on complete dataset
+        classifier.fit(X, Y)
+
+        # Save trained model
+        joblib.dump(
+            classifier,
+            MODEL_PATH
+        )
+
+        result_label.config(
+            text=f"Model Accuracy: {accuracy * 100:.2f}%",
+            fg="green"
+        )
+
+        messagebox.showinfo(
+            "Training Completed",
+            f"SVM Model Trained Successfully!\n\n"
+            f"Training Samples: {len(train_x)}\n"
+            f"Testing Samples: {len(test_x)}\n"
+            f"Accuracy: {accuracy * 100:.2f}%"
+        )
+
+        print("\nClassification Report:\n")
+
+        print(
+            classification_report(
+                test_y,
+                prediction,
+                zero_division=0
+            )
+        )
+
+    except Exception as e:
+
+        messagebox.showerror(
+            "Training Error",
+            str(e)
+        )
+
+
+# =====================================================
+# 11. PREDICT HANDWRITTEN DIGIT
+# =====================================================
+
+def predict_digit():
+
+    if not os.path.exists(MODEL_PATH):
+
+        messagebox.showerror(
+            "Model Not Found",
+            "Please generate the dataset and train the model first."
+        )
+
+        return
+
+    if np.max(np.array(drawing_image)) == 0:
+
+        messagebox.showerror(
+            "Empty Canvas",
+            "Please draw a digit first."
+        )
+
+        return
+
+    try:
+
+        # Load trained model
+        model = joblib.load(MODEL_PATH)
+
+        # Preprocess current drawing
+        pixels = preprocess_image(drawing_image)
+
+        # Reshape into one sample
+        pixels = pixels.reshape(1, 784)
+
+        # Predict digit
+        prediction = model.predict(pixels)
+
+        predicted_digit = prediction[0]
+
+        result_label.config(
+            text=f"Predicted Digit: {predicted_digit}",
+            fg="green"
+        )
+
+    except Exception as e:
+
+        messagebox.showerror(
+            "Prediction Error",
+            str(e)
+        )
+
+
+# =====================================================
+# 12. SHOW DATASET INFORMATION
+# =====================================================
+
+def show_dataset_info():
+
+    if not os.path.exists(DATASET_PATH):
+
+        messagebox.showerror(
+            "Error",
+            "Generate the dataset first."
+        )
+
+        return
+
+    data = pd.read_csv(DATASET_PATH)
+
+    counts = data["label"].value_counts().sort_index()
+
+    information = "Dataset Information\n\n"
+
+    information += f"Total Samples: {len(data)}\n\n"
+
+    for digit, count in counts.items():
+
+        information += f"Digit {digit}: {count} images\n"
+
+    messagebox.showinfo(
+        "Dataset Information",
+        information
+    )
+
+
+# =====================================================
+# 13. GUI INPUT SECTION
+# =====================================================
+
+label_frame = tk.Frame(
+    window,
+    bg="#f0f2f5"
+)
+
+label_frame.pack(pady=10)
+
+tk.Label(
+    label_frame,
+    text="Enter Digit Label (0-9):",
+    font=("Arial", 12, "bold"),
+    bg="#f0f2f5"
+).pack(side=tk.LEFT, padx=5)
+
+
+label_entry = tk.Entry(
+    label_frame,
+    width=8,
+    font=("Arial", 12),
+    justify="center"
+)
+
+label_entry.pack(side=tk.LEFT)
+
+
+# =====================================================
+# 14. BUTTON SECTION
+# =====================================================
+
+button_frame = tk.Frame(
+    window,
+    bg="#f0f2f5"
+)
+
+button_frame.pack(pady=10)
+
+
+tk.Button(
+    button_frame,
+    text="1. Save Sample",
+    command=save_sample,
+    bg="#ffb74d",
+    width=20,
+    height=2
+).grid(row=0, column=0, padx=8, pady=6)
+
+
+tk.Button(
+    button_frame,
+    text="2. Generate Dataset",
+    command=generate_dataset,
+    bg="#f48fb1",
+    width=20,
+    height=2
+).grid(row=0, column=1, padx=8, pady=6)
+
+
+tk.Button(
+    button_frame,
+    text="3. Train Model",
+    command=train_model,
+    bg="#81c784",
+    width=20,
+    height=2
+).grid(row=1, column=0, padx=8, pady=6)
+
+
+tk.Button(
+    button_frame,
+    text="4. Predict Digit",
+    command=predict_digit,
+    bg="#64b5f6",
+    width=20,
+    height=2
+).grid(row=1, column=1, padx=8, pady=6)
+
+
+tk.Button(
+    button_frame,
+    text="5. Clear Canvas",
+    command=clear_canvas,
+    bg="#bdbdbd",
+    width=20,
+    height=2
+).grid(row=2, column=0, padx=8, pady=6)
+
+
+tk.Button(
+    button_frame,
+    text="6. Dataset Information",
+    command=show_dataset_info,
+    bg="#ce93d8",
+    width=20,
+    height=2
+).grid(row=2, column=1, padx=8, pady=6)
+
+
+# =====================================================
+# 15. RESULT DISPLAY
+# =====================================================
+
+result_label = tk.Label(
+    window,
+    text="Draw a digit from 0 to 9",
+    font=("Arial", 18, "bold"),
+    bg="#f0f2f5",
+    fg="#173b70"
+)
+
+result_label.pack(pady=15)
+
+
+# =====================================================
+# 16. FOOTER
+# =====================================================
+
+footer = tk.Label(
+    window,
+    text="Developed using Python | OpenCV | SVM | Tkinter",
+    font=("Arial", 9),
+    bg="#f0f2f5",
+    fg="gray"
+)
+
+footer.pack(side=tk.BOTTOM, pady=10)
+
+
+# =====================================================
+# 17. START APPLICATION
+# =====================================================
+
+window.mainloop()
